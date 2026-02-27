@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>缝线谜题（本地版）</title>
+  <title>缝线谜题</title>
   <style>
     * { box-sizing: border-box; }
     body {
@@ -89,7 +89,7 @@
 </head>
 <body>
   <div class="app">
-    <h1>缝线谜题（本地可玩）</h1>
+    <h1>缝线谜题</h1>
 
     <div class="toolbar">
       <div class="group" id="toolGroup">
@@ -128,8 +128,17 @@
     <div id="meta" class="meta"></div>
 
     <div class="desc">
-      <div><strong>规则：</strong>不同区域相邻时需缝线连接；每格最多只参与一条缝线；行列数字表示该行/列有针孔的格子数；每一对相邻区域需要恰好 <span id="difficultyText">1</span> 条缝线连接。</div>
-      <div class="small">操作：点击格子边缘可操作边；点击格子内部可操作格子。右键可快速放置 X 标记。</div>
+      <div><strong>缝线是一种逻辑解谜游戏，它规则简单，解题过程富有挑战性。</strong></div>
+      <div style="margin-top:8px;"><strong style="color:#b60000;">游戏规则：</strong></div>
+      <div>1、将每一块与所有相邻块都缝合起来</div>
+      <div>2、只能将不同块的相邻单元格缝合，不能斜着缝</div>
+      <div>3、一个单元格只能打一个针孔缝一条线，不能同时缝2条线</div>
+      <div>4、格子外面数字是该行或该列的针孔数</div>
+      <div>5、<span id="difficultyText">1</span>÷ 谜题，要用 <span id="difficultyText2">1</span> 条缝线将相邻块缝起来；依次类推。</div>
+      <div style="margin-top:8px;"><strong style="color:#b60000;">操作说明：</strong></div>
+      <div>1、单击两个单元格中间可放下缝线，右键单击边框则标记为红色。</div>
+      <div>2、单击单元格内部则放下一个针孔，右键单击单元格内部则标记一个X。</div>
+      <div class="small" style="margin-top:6px;">补充：当前实现中，缝线可用“点边界”或“先点一个格子再点相邻格子”两种方式操作。</div>
     </div>
   </div>
 
@@ -142,6 +151,7 @@
     const ctx = board.getContext('2d');
     const metaEl = document.getElementById('meta');
     const difficultyText = document.getElementById('difficultyText');
+    const difficultyText2 = document.getElementById('difficultyText2');
 
     const sizeSelect = document.getElementById('sizeSelect');
     const difficultySelect = document.getElementById('difficultySelect');
@@ -1012,6 +1022,7 @@
       state.puzzleId += 1;
 
       difficultyText.textContent = String(d);
+      difficultyText2.textContent = String(d);
       draw();
       setMeta(`${n}x${n}/${d}÷ ${state.mode === 'hard' ? '困难' : '普通'} · 本地题号: ${Date.now().toString().slice(-7)}-${state.puzzleId}`);
     }
