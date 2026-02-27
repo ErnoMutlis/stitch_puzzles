@@ -1,0 +1,1114 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>缝线谜题（本地版）</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Microsoft YaHei", Arial, sans-serif;
+      background: #f3f3f3;
+      color: #222;
+      display: flex;
+      justify-content: center;
+      padding: 20px;
+    }
+    .app {
+      width: min(940px, 100%);
+      background: #fff;
+      border: 1px solid #ddd;
+      padding: 16px;
+    }
+    h1 {
+      font-size: 24px;
+      margin: 0 0 12px;
+      text-align: center;
+    }
+    .toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-bottom: 12px;
+      align-items: center;
+    }
+    .toolbar .group {
+      display: flex;
+      gap: 6px;
+      background: #f7f7f7;
+      border: 1px solid #ddd;
+      padding: 6px;
+    }
+    button, select {
+      border: 1px solid #333;
+      background: #fff;
+      height: 34px;
+      padding: 0 12px;
+      cursor: pointer;
+      font-size: 14px;
+    }
+    button.active {
+      background: #89e689;
+    }
+    button.warn { background: #ffeaea; border-color: #c9302c; color: #c9302c; }
+    button.primary { background: #e9f4ff; border-color: #3b82f6; }
+
+    .board-wrap {
+      position: relative;
+      width: fit-content;
+      margin: 0 auto;
+      padding: 40px 16px 16px 40px;
+      border: 2px solid #3b6bb7;
+      background: #f9f9f9;
+    }
+    canvas {
+      display: block;
+      background: #fff;
+      border: 1px solid #333;
+    }
+    .meta {
+      margin-top: 12px;
+      text-align: center;
+      font-size: 30px;
+      min-height: 28px;
+    }
+    .desc {
+      margin-top: 12px;
+      line-height: 1.6;
+      font-size: 14px;
+      color: #333;
+      border-top: 1px solid #e5e5e5;
+      padding-top: 10px;
+    }
+    .small {
+      font-size: 13px;
+      color: #666;
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <h1>缝线谜题（本地可玩）</h1>
+
+    <div class="toolbar">
+      <div class="group" id="toolGroup">
+        <button data-tool="stitch" class="active">缝线</button>
+        <button data-tool="x">X 标记</button>
+        <button data-tool="erase">橡皮擦</button>
+        <button data-tool="shade">绿色标记</button>
+      </div>
+      <div class="group">
+        <select id="sizeSelect">
+          <option value="5">5x5</option>
+          <option value="7">7x7</option>
+          <option value="10">10x10</option>
+          <option value="15">15x15</option>
+        </select>
+        <select id="difficultySelect">
+          <option value="1">1÷</option>
+          <option value="2">2÷</option>
+          <option value="3">3÷</option>
+        </select>
+        <select id="modeSelect">
+          <option value="normal">普通</option>
+          <option value="hard">困难</option>
+        </select>
+      </div>
+      <button id="newPuzzleBtn" class="primary">生成新题</button>
+      <button id="resetBtn">重置当前</button>
+      <button id="checkBtn">检查</button>
+      <button id="showAnswerBtn" class="warn">显示答案</button>
+    </div>
+
+    <div class="board-wrap">
+      <canvas id="board"></canvas>
+    </div>
+
+    <div id="meta" class="meta"></div>
+
+    <div class="desc">
+      <div><strong>规则：</strong>不同区域相邻时需缝线连接；每格最多只参与一条缝线；行列数字表示该行/列有针孔的格子数；每一对相邻区域需要恰好 <span id="difficultyText">1</span> 条缝线连接。</div>
+      <div class="small">操作：点击格子边缘可操作边；点击格子内部可操作格子。右键可快速放置 X 标记。</div>
+    </div>
+  </div>
+
+  <script>
+    const CELL = 64;
+    const LABEL = 34;
+    const EDGE_HIT = 12;
+
+    const board = document.getElementById('board');
+    const ctx = board.getContext('2d');
+    const metaEl = document.getElementById('meta');
+    const difficultyText = document.getElementById('difficultyText');
+
+    const sizeSelect = document.getElementById('sizeSelect');
+    const difficultySelect = document.getElementById('difficultySelect');
+    const modeSelect = document.getElementById('modeSelect');
+    const newPuzzleBtn = document.getElementById('newPuzzleBtn');
+    const resetBtn = document.getElementById('resetBtn');
+    const checkBtn = document.getElementById('checkBtn');
+    const showAnswerBtn = document.getElementById('showAnswerBtn');
+
+    const toolGroup = document.getElementById('toolGroup');
+
+    const ALLOWED_DIVISORS = {
+      5: [1],
+      7: [1, 2],
+      10: [1, 2, 3],
+      15: [1, 2, 3],
+    };
+    const HARD_ONLY_COMBOS = new Set(['15-2', '15-3']);
+
+    const state = {
+      size: 5,
+      difficulty: 1,
+      mode: 'normal',
+      regionMap: [],
+      rowClues: [],
+      colClues: [],
+      answerEdges: new Set(),
+      edges: new Map(),
+      cellMarks: new Map(),
+      currentTool: 'stitch',
+      pendingCell: null,
+      puzzleId: 0,
+      answerVisible: false,
+      solved: false,
+    };
+
+    function keyCell(r, c) { return `${r},${c}`; }
+    function parseCell(k) {
+      const [r, c] = k.split(',').map(Number);
+      return { r, c };
+    }
+    function edgeKey(r1, c1, r2, c2) {
+      const a = `${r1},${c1}`;
+      const b = `${r2},${c2}`;
+      return a < b ? `${a}|${b}` : `${b}|${a}`;
+    }
+    function parseEdge(k) {
+      const [a, b] = k.split('|');
+      return { a: parseCell(a), b: parseCell(b) };
+    }
+
+    function inBounds(r, c, n) {
+      return r >= 0 && c >= 0 && r < n && c < n;
+    }
+
+    function generateRegions(n, regionCount) {
+      for (let tries = 0; tries < 100; tries++) {
+        const map = Array.from({ length: n }, () => Array(n).fill(-1));
+        const seeds = [];
+        const used = new Set();
+
+        while (seeds.length < regionCount) {
+          const r = Math.floor(Math.random() * n);
+          const c = Math.floor(Math.random() * n);
+          const k = keyCell(r, c);
+          if (used.has(k)) continue;
+          used.add(k);
+          seeds.push({ r, c, id: seeds.length });
+          map[r][c] = seeds.length - 1;
+        }
+
+        const frontier = seeds.map(s => ({ ...s }));
+        let empty = n * n - seeds.length;
+
+        while (empty > 0) {
+          const idx = Math.floor(Math.random() * frontier.length);
+          const f = frontier[idx];
+          const dirs = [[1,0],[-1,0],[0,1],[0,-1]].sort(() => Math.random() - 0.5);
+          let expanded = false;
+
+          for (const [dr, dc] of dirs) {
+            const nr = f.r + dr;
+            const nc = f.c + dc;
+            if (!inBounds(nr, nc, n) || map[nr][nc] !== -1) continue;
+            map[nr][nc] = f.id;
+            frontier.push({ r: nr, c: nc, id: f.id });
+            empty--;
+            expanded = true;
+            break;
+          }
+          if (!expanded) frontier.splice(idx, 1);
+          if (!frontier.length) break;
+        }
+
+        const sizes = new Map();
+        for (let r = 0; r < n; r++) {
+          for (let c = 0; c < n; c++) {
+            const id = map[r][c];
+            sizes.set(id, (sizes.get(id) || 0) + 1);
+          }
+        }
+
+        if ([...sizes.values()].every(v => v >= 2)) return map;
+      }
+      return null;
+    }
+
+    function buildBorderGroups(regionMap) {
+      const n = regionMap.length;
+      const groups = new Map();
+
+      for (let r = 0; r < n; r++) {
+        for (let c = 0; c < n; c++) {
+          const id = regionMap[r][c];
+          const dirs = [[0,1],[1,0]];
+          for (const [dr, dc] of dirs) {
+            const nr = r + dr;
+            const nc = c + dc;
+            if (!inBounds(nr, nc, n)) continue;
+            const nid = regionMap[nr][nc];
+            if (nid === id) continue;
+            const pair = id < nid ? `${id}-${nid}` : `${nid}-${id}`;
+            if (!groups.has(pair)) groups.set(pair, []);
+            groups.get(pair).push(edgeKey(r, c, nr, nc));
+          }
+        }
+      }
+      return groups;
+    }
+
+    function chooseCombinations(arr, k) {
+      const res = [];
+      const path = [];
+      function dfs(i, left) {
+        if (left === 0) {
+          res.push(path.slice());
+          return;
+        }
+        if (i >= arr.length) return;
+        if (arr.length - i < left) return;
+
+        path.push(arr[i]);
+        dfs(i + 1, left - 1);
+        path.pop();
+        dfs(i + 1, left);
+      }
+      dfs(0, k);
+      return res;
+    }
+
+    function generateSolutionForRegions(regionMap, difficulty) {
+      const groups = buildBorderGroups(regionMap);
+      const entries = [...groups.entries()].sort((a, b) => a[1].length - b[1].length);
+
+      if (entries.some(([, edges]) => edges.length < difficulty)) return null;
+
+      const usedCells = new Set();
+      const chosen = new Set();
+
+      function edgeCells(ek) {
+        const { a, b } = parseEdge(ek);
+        return [keyCell(a.r, a.c), keyCell(b.r, b.c)];
+      }
+
+      function backtrack(index) {
+        if (index === entries.length) return true;
+
+        const [, edges] = entries[index];
+        const combos = chooseCombinations(edges, difficulty).sort(() => Math.random() - 0.5);
+
+        for (const combo of combos) {
+          let ok = true;
+          const touched = [];
+          const touchedLocal = new Set();
+
+          for (const ek of combo) {
+            const [ca, cb] = edgeCells(ek);
+            if (usedCells.has(ca) || usedCells.has(cb) || touchedLocal.has(ca) || touchedLocal.has(cb)) {
+              ok = false;
+              break;
+            }
+            touched.push(ca, cb);
+            touchedLocal.add(ca);
+            touchedLocal.add(cb);
+          }
+          if (!ok) continue;
+
+          for (const k of touched) usedCells.add(k);
+          for (const ek of combo) chosen.add(ek);
+
+          if (backtrack(index + 1)) return true;
+
+          for (const k of touched) usedCells.delete(k);
+          for (const ek of combo) chosen.delete(ek);
+        }
+
+        return false;
+      }
+
+      const success = backtrack(0);
+      return success ? chosen : null;
+    }
+
+    function cluesFromSolution(size, solutionEdges) {
+      const row = Array(size).fill(0);
+      const col = Array(size).fill(0);
+      const holeCells = new Set();
+
+      solutionEdges.forEach(ek => {
+        const { a, b } = parseEdge(ek);
+        holeCells.add(keyCell(a.r, a.c));
+        holeCells.add(keyCell(b.r, b.c));
+      });
+
+      for (const k of holeCells) {
+        const { r, c } = parseCell(k);
+        row[r]++;
+        col[c]++;
+      }
+      return { row, col };
+    }
+
+    function buildCandidateRegionCounts(size, difficulty, isHard, maxRegionCount) {
+      let base;
+      if (size <= 5) base = 4;
+      else if (size <= 7) base = difficulty >= 2 ? 5 : 6;
+      else if (size <= 10) base = difficulty >= 3 ? 7 : 8;
+      else base = difficulty >= 3 ? 8 : difficulty >= 2 ? 10 : 12;
+
+      if (isHard) base += 1;
+
+      const set = new Set();
+      for (let delta = -3; delta <= 3; delta++) {
+        const v = Math.max(3, Math.min(maxRegionCount, base + delta));
+        set.add(v);
+      }
+
+      return [...set].sort(() => Math.random() - 0.5);
+    }
+
+    function generatePuzzle(size, difficulty) {
+      const isHard = state.mode === 'hard';
+      const maxPairsByCapacity = Math.floor((size * size) / (2 * difficulty));
+      const maxRegionCount = Math.max(3, Math.min(size, maxPairsByCapacity + 1));
+      const candidateRegionCounts = buildCandidateRegionCounts(size, difficulty, isHard, maxRegionCount);
+
+      for (let attempt = 0; attempt < 320; attempt++) {
+        const regionCount = candidateRegionCounts[attempt % candidateRegionCounts.length];
+        const regionMap = generateRegions(size, regionCount);
+        if (!regionMap) continue;
+
+        const groups = buildBorderGroups(regionMap);
+        if (groups.size > maxPairsByCapacity) continue;
+        if ([...groups.values()].some(edges => edges.length < difficulty)) continue;
+
+        const solution = generateSolutionForRegions(regionMap, difficulty);
+        if (!solution) continue;
+
+        const { row, col } = cluesFromSolution(size, solution);
+        if (row.some(v => v === 0) || col.some(v => v === 0)) continue;
+
+        return {
+          regionMap,
+          answerEdges: solution,
+          rowClues: row,
+          colClues: col,
+        };
+      }
+
+      const irregularFallback = generateGuaranteedIrregularPuzzle(size, difficulty);
+      if (irregularFallback) return irregularFallback;
+
+      return generateGuaranteedStripePuzzle(size, difficulty);
+    }
+    function generateGuaranteedIrregularPuzzle(size, difficulty) {
+      const maxPairsByCapacity = Math.floor((size * size) / (2 * difficulty));
+      const maxRegionCount = Math.max(3, Math.min(size, maxPairsByCapacity + 1));
+
+      for (let attempt = 0; attempt < 520; attempt++) {
+        const low = Math.max(3, Math.floor(maxRegionCount * 0.55));
+        const high = Math.max(low, maxRegionCount);
+        const regionCount = low + Math.floor(Math.random() * (high - low + 1));
+
+        const regionMap = generateRegions(size, regionCount);
+        if (!regionMap) continue;
+
+        const groups = buildBorderGroups(regionMap);
+        if (groups.size > maxPairsByCapacity) continue;
+        if ([...groups.values()].some(edges => edges.length < difficulty)) continue;
+
+        const answerEdges = generateSolutionForRegions(regionMap, difficulty);
+        if (!answerEdges) continue;
+
+        const { row, col } = cluesFromSolution(size, answerEdges);
+        if (row.some(v => v === 0) || col.some(v => v === 0)) continue;
+
+        return {
+          regionMap,
+          answerEdges,
+          rowClues: row,
+          colClues: col,
+        };
+      }
+
+      return null;
+    }
+
+
+    function randomPositiveParts(total, parts) {
+      const arr = Array(parts).fill(1);
+      let remain = total - parts;
+      while (remain > 0) {
+        const i = Math.floor(Math.random() * parts);
+        arr[i]++;
+        remain--;
+      }
+      return arr;
+    }
+
+    function shuffledRange(n) {
+      const arr = Array.from({ length: n }, (_, i) => i);
+      for (let i = arr.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [arr[i], arr[j]] = [arr[j], arr[i]];
+      }
+      return arr;
+    }
+
+    function createStripeRegionMap(size, widths) {
+      const regionMap = Array.from({ length: size }, () => Array(size).fill(0));
+      let colStart = 0;
+      for (let id = 0; id < widths.length; id++) {
+        const w = widths[id];
+        for (let r = 0; r < size; r++) {
+          for (let c = colStart; c < colStart + w; c++) {
+            regionMap[r][c] = id;
+          }
+        }
+        colStart += w;
+      }
+      return regionMap;
+    }
+
+    function createWavyStripeRegionMap(size, stripeCount) {
+      const widths = randomPositiveParts(size, stripeCount);
+      const boundaries = [];
+      let acc = 0;
+      for (let i = 0; i < widths.length - 1; i++) {
+        acc += widths[i];
+        boundaries.push(acc - 1);
+      }
+
+      const rowBoundaries = [];
+      const current = boundaries.slice();
+      for (let r = 0; r < size; r++) {
+        for (let i = 0; i < current.length; i++) {
+          const delta = [-1, 0, 1][Math.floor(Math.random() * 3)];
+          const minB = i === 0 ? 0 : current[i - 1] + 1;
+          const maxB = i === current.length - 1 ? size - 2 : current[i + 1] - 1;
+          const next = current[i] + delta;
+          current[i] = Math.max(minB, Math.min(maxB, next));
+        }
+        rowBoundaries.push(current.slice());
+      }
+
+      const regionMap = Array.from({ length: size }, () => Array(size).fill(0));
+      for (let r = 0; r < size; r++) {
+        const b = rowBoundaries[r];
+        for (let c = 0; c < size; c++) {
+          let id = 0;
+          while (id < b.length && c > b[id]) id++;
+          regionMap[r][c] = id;
+        }
+      }
+      return regionMap;
+    }
+
+    function generateGuaranteedStripePuzzle(size, difficulty) {
+      const maxPairsByCapacity = Math.floor((size * size) / (2 * difficulty));
+      const maxStripes = Math.max(2, Math.min(size, maxPairsByCapacity + 1));
+      const base = size <= 5 ? 4 : size <= 7 ? 5 : size <= 10 ? 7 : 9;
+      const stripeCount = Math.max(2, Math.min(maxStripes, base));
+
+      for (let attempt = 0; attempt < 80; attempt++) {
+        const regionMap = createWavyStripeRegionMap(size, stripeCount);
+        const groups = buildBorderGroups(regionMap);
+        if ([...groups.values()].some(edges => edges.length < difficulty)) continue;
+
+        const answerEdges = generateSolutionForRegions(regionMap, difficulty);
+        if (!answerEdges) continue;
+
+        const { row, col } = cluesFromSolution(size, answerEdges);
+        if (row.some(v => v === 0) || col.some(v => v === 0)) continue;
+
+        return {
+          regionMap,
+          answerEdges,
+          rowClues: row,
+          colClues: col,
+        };
+      }
+
+      for (let attempt = 0; attempt < 60; attempt++) {
+        const widths = randomPositiveParts(size, stripeCount);
+        const regionMap = createStripeRegionMap(size, widths);
+        const answerEdges = generateSolutionForRegions(regionMap, difficulty);
+        if (!answerEdges) continue;
+
+        const { row, col } = cluesFromSolution(size, answerEdges);
+        if (row.some(v => v === 0) || col.some(v => v === 0)) continue;
+
+        return {
+          regionMap,
+          answerEdges,
+          rowClues: row,
+          colClues: col,
+        };
+      }
+
+      return null;
+    }
+
+    function getEdgeType(ek) {
+      return state.edges.get(ek) || 'none';
+    }
+
+    function setEdgeType(ek, type) {
+      if (type === 'none') state.edges.delete(ek);
+      else state.edges.set(ek, type);
+    }
+
+    function edgeBetweenCells(a, b) {
+      const dr = Math.abs(a.r - b.r);
+      const dc = Math.abs(a.c - b.c);
+      if (dr + dc !== 1) return null;
+      return edgeKey(a.r, a.c, b.r, b.c);
+    }
+
+    function degreeMap() {
+      const deg = new Map();
+      state.edges.forEach((t, ek) => {
+        if (t !== 'stitch') return;
+        const { a, b } = parseEdge(ek);
+        const ka = keyCell(a.r, a.c);
+        const kb = keyCell(b.r, b.c);
+        deg.set(ka, (deg.get(ka) || 0) + 1);
+        deg.set(kb, (deg.get(kb) || 0) + 1);
+      });
+      return deg;
+    }
+
+    function validateCurrent(strictDone = false) {
+      const n = state.size;
+      const deg = degreeMap();
+
+      for (const [cell, d] of deg.entries()) {
+        if (d > 1) {
+          return { ok: false, msg: `格子 ${cell} 参与了超过 1 条缝线` };
+        }
+      }
+
+      const pairCount = new Map();
+      state.edges.forEach((type, ek) => {
+        if (type !== 'stitch') return;
+        const { a, b } = parseEdge(ek);
+        const ida = state.regionMap[a.r][a.c];
+        const idb = state.regionMap[b.r][b.c];
+        if (ida === idb) {
+          return;
+        }
+        const pair = ida < idb ? `${ida}-${idb}` : `${idb}-${ida}`;
+        pairCount.set(pair, (pairCount.get(pair) || 0) + 1);
+      });
+
+      const groups = buildBorderGroups(state.regionMap);
+      for (const [pair] of groups) {
+        const count = pairCount.get(pair) || 0;
+        if (count > state.difficulty) {
+          return { ok: false, msg: `相邻区域 ${pair} 的缝线超过 ${state.difficulty} 条` };
+        }
+      }
+
+      const row = Array(n).fill(0);
+      const col = Array(n).fill(0);
+      for (const k of deg.keys()) {
+        const { r, c } = parseCell(k);
+        row[r]++;
+        col[c]++;
+      }
+
+      for (let i = 0; i < n; i++) {
+        if (row[i] > state.rowClues[i]) return { ok: false, msg: `第 ${i + 1} 行针孔数超出` };
+        if (col[i] > state.colClues[i]) return { ok: false, msg: `第 ${i + 1} 列针孔数超出` };
+      }
+
+      if (!strictDone) return { ok: true, msg: '当前状态合法' };
+
+      for (let i = 0; i < n; i++) {
+        if (row[i] !== state.rowClues[i] || col[i] !== state.colClues[i]) {
+          return { ok: false, msg: '行列针孔数还未完全匹配' };
+        }
+      }
+
+      for (const [pair] of groups) {
+        const count = pairCount.get(pair) || 0;
+        if (count !== state.difficulty) {
+          return { ok: false, msg: `相邻区域 ${pair} 还需缝到 ${state.difficulty} 条` };
+        }
+      }
+
+      return { ok: true, msg: '恭喜，已完成！' };
+    }
+
+    function trySetStitch(ek) {
+      const { a, b } = parseEdge(ek);
+      const ida = state.regionMap[a.r][a.c];
+      const idb = state.regionMap[b.r][b.c];
+      if (ida === idb) {
+        setMeta('同一区域不能缝线');
+        return;
+      }
+
+      const deg = degreeMap();
+      const ka = keyCell(a.r, a.c);
+      const kb = keyCell(b.r, b.c);
+
+      const current = getEdgeType(ek);
+      if (current === 'stitch') {
+        setEdgeType(ek, 'none');
+      } else {
+        const da = deg.get(ka) || 0;
+        const db = deg.get(kb) || 0;
+        if (da >= 1 || db >= 1) {
+          setMeta('一个格子最多参与 1 条缝线');
+          return;
+        }
+        setEdgeType(ek, 'stitch');
+      }
+
+      afterAction();
+    }
+
+    function applyToolOnEdge(ek) {
+      if (state.currentTool === 'stitch') {
+        trySetStitch(ek);
+        return;
+      }
+      if (state.currentTool === 'x') {
+        const t = getEdgeType(ek);
+        setEdgeType(ek, t === 'edgeX' ? 'none' : 'edgeX');
+        afterAction();
+        return;
+      }
+      if (state.currentTool === 'erase') {
+        setEdgeType(ek, 'none');
+        afterAction();
+      }
+    }
+
+    function applyToolOnCell(r, c) {
+      const k = keyCell(r, c);
+      const t = state.cellMarks.get(k) || 'none';
+
+      if (state.currentTool === 'stitch') {
+        if (!state.pendingCell) {
+          state.pendingCell = { r, c };
+          draw();
+          setMeta('已选中第一个格子，请点击相邻格子完成缝线');
+          return;
+        }
+
+        const first = state.pendingCell;
+        state.pendingCell = null;
+
+        if (first.r === r && first.c === c) {
+          draw();
+          setMeta('已取消选择');
+          return;
+        }
+
+        const ek = edgeBetweenCells(first, { r, c });
+        if (!ek) {
+          draw();
+          setMeta('第二个格子必须与第一个格子正交相邻');
+          return;
+        }
+
+        trySetStitch(ek);
+        return;
+      }
+
+      if (state.currentTool === 'shade') {
+        state.cellMarks.set(k, t === 'shade' ? 'none' : 'shade');
+      } else if (state.currentTool === 'x') {
+        state.cellMarks.set(k, t === 'cellX' ? 'none' : 'cellX');
+      } else if (state.currentTool === 'erase') {
+        state.cellMarks.delete(k);
+      }
+
+      if (state.cellMarks.get(k) === 'none') state.cellMarks.delete(k);
+      afterAction();
+    }
+
+    function getHoverTarget(x, y) {
+      const gx = x - LABEL;
+      const gy = y - LABEL;
+      const n = state.size;
+      const boardSize = n * CELL;
+
+      if (gx < 0 || gy < 0 || gx > boardSize || gy > boardSize) return null;
+
+      const c = Math.floor(gx / CELL);
+      const r = Math.floor(gy / CELL);
+      if (!inBounds(r, c, n)) return null;
+
+      const dx = gx - c * CELL;
+      const dy = gy - r * CELL;
+
+      const candidates = [];
+      if (dx < EDGE_HIT && c > 0) candidates.push({ d: dx, type: 'edge', a: { r, c }, b: { r, c: c - 1 } });
+      if (CELL - dx < EDGE_HIT && c < n - 1) candidates.push({ d: CELL - dx, type: 'edge', a: { r, c }, b: { r, c: c + 1 } });
+      if (dy < EDGE_HIT && r > 0) candidates.push({ d: dy, type: 'edge', a: { r, c }, b: { r: r - 1, c } });
+      if (CELL - dy < EDGE_HIT && r < n - 1) candidates.push({ d: CELL - dy, type: 'edge', a: { r, c }, b: { r: r + 1, c } });
+
+      if (candidates.length) {
+        candidates.sort((p, q) => p.d - q.d);
+        const edge = edgeBetweenCells(candidates[0].a, candidates[0].b);
+        return { kind: 'edge', edge };
+      }
+
+      return { kind: 'cell', r, c };
+    }
+
+    function draw() {
+      const n = state.size;
+      const w = LABEL + n * CELL + 2;
+      const h = LABEL + n * CELL + 2;
+      board.width = w;
+      board.height = h;
+
+      ctx.clearRect(0, 0, w, h);
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, w, h);
+
+      const palette = ['#f7f7f7', '#f1f5ff', '#fff6f1', '#f2fff2', '#fff7ff', '#f2fbff', '#fafae8', '#f8f0f0', '#eef8f8', '#f6f2ff'];
+
+      for (let r = 0; r < n; r++) {
+        for (let c = 0; c < n; c++) {
+          const id = state.regionMap[r][c] % palette.length;
+          const x = LABEL + c * CELL;
+          const y = LABEL + r * CELL;
+          ctx.fillStyle = palette[id];
+          ctx.fillRect(x, y, CELL, CELL);
+
+          const cm = state.cellMarks.get(keyCell(r, c));
+          if (cm === 'shade') {
+            ctx.fillStyle = 'rgba(60, 220, 60, 0.45)';
+            ctx.fillRect(x, y, CELL, CELL);
+          }
+          if (cm === 'cellX') {
+            ctx.strokeStyle = '#c62222';
+            ctx.lineWidth = 3;
+            ctx.beginPath();
+            ctx.moveTo(x + 14, y + 14);
+            ctx.lineTo(x + CELL - 14, y + CELL - 14);
+            ctx.moveTo(x + CELL - 14, y + 14);
+            ctx.lineTo(x + 14, y + CELL - 14);
+            ctx.stroke();
+          }
+
+          if (state.currentTool === 'stitch' && state.pendingCell && state.pendingCell.r === r && state.pendingCell.c === c) {
+            ctx.strokeStyle = '#2f7fff';
+            ctx.lineWidth = 3;
+            ctx.strokeRect(x + 5, y + 5, CELL - 10, CELL - 10);
+          }
+        }
+      }
+
+      for (let i = 0; i <= n; i++) {
+        const px = LABEL + i * CELL;
+        const py = LABEL + i * CELL;
+
+        ctx.strokeStyle = '#8f8f8f';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(LABEL, py);
+        ctx.lineTo(LABEL + n * CELL, py);
+        ctx.stroke();
+
+        ctx.beginPath();
+        ctx.moveTo(px, LABEL);
+        ctx.lineTo(px, LABEL + n * CELL);
+        ctx.stroke();
+      }
+
+      ctx.strokeStyle = '#000';
+      ctx.lineWidth = 4;
+
+      for (let r = 0; r < n; r++) {
+        for (let c = 0; c < n; c++) {
+          const id = state.regionMap[r][c];
+          const x = LABEL + c * CELL;
+          const y = LABEL + r * CELL;
+
+          if (c === 0 || state.regionMap[r][c - 1] !== id) {
+            ctx.beginPath();
+            ctx.moveTo(x, y);
+            ctx.lineTo(x, y + CELL);
+            ctx.stroke();
+          }
+          if (c === n - 1 || state.regionMap[r][c + 1] !== id) {
+            ctx.beginPath();
+            ctx.moveTo(x + CELL, y);
+            ctx.lineTo(x + CELL, y + CELL);
+            ctx.stroke();
+          }
+          if (r === 0 || state.regionMap[r - 1][c] !== id) {
+            ctx.beginPath();
+            ctx.moveTo(x, y);
+            ctx.lineTo(x + CELL, y);
+            ctx.stroke();
+          }
+          if (r === n - 1 || state.regionMap[r + 1][c] !== id) {
+            ctx.beginPath();
+            ctx.moveTo(x, y + CELL);
+            ctx.lineTo(x + CELL, y + CELL);
+            ctx.stroke();
+          }
+        }
+      }
+
+      const drawEdgeX = (ek) => {
+        const { a, b } = parseEdge(ek);
+        const x1 = LABEL + (a.c + 0.5) * CELL;
+        const y1 = LABEL + (a.r + 0.5) * CELL;
+        const x2 = LABEL + (b.c + 0.5) * CELL;
+        const y2 = LABEL + (b.r + 0.5) * CELL;
+        const mx = (x1 + x2) / 2;
+        const my = (y1 + y2) / 2;
+
+        ctx.strokeStyle = '#d02222';
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        ctx.moveTo(mx - 8, my - 8);
+        ctx.lineTo(mx + 8, my + 8);
+        ctx.moveTo(mx + 8, my - 8);
+        ctx.lineTo(mx - 8, my + 8);
+        ctx.stroke();
+      };
+
+      const drawStitch = (ek, answer = false) => {
+        const { a, b } = parseEdge(ek);
+        const x1 = LABEL + (a.c + 0.5) * CELL;
+        const y1 = LABEL + (a.r + 0.5) * CELL;
+        const x2 = LABEL + (b.c + 0.5) * CELL;
+        const y2 = LABEL + (b.r + 0.5) * CELL;
+
+        ctx.strokeStyle = answer ? 'rgba(40, 120, 255, 0.55)' : '#000';
+        ctx.lineWidth = answer ? 7 : 6;
+        ctx.beginPath();
+        ctx.moveTo(x1, y1);
+        ctx.lineTo(x2, y2);
+        ctx.stroke();
+
+        ctx.fillStyle = answer ? 'rgba(40, 120, 255, 0.65)' : '#000';
+        ctx.beginPath();
+        ctx.arc(x1, y1, answer ? 4.5 : 4, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.beginPath();
+        ctx.arc(x2, y2, answer ? 4.5 : 4, 0, Math.PI * 2);
+        ctx.fill();
+      };
+
+      state.edges.forEach((type, ek) => {
+        if (type === 'stitch') drawStitch(ek, false);
+        if (type === 'edgeX') drawEdgeX(ek);
+      });
+
+      if (state.answerVisible) {
+        for (const ek of state.answerEdges) {
+          if (getEdgeType(ek) !== 'stitch') drawStitch(ek, true);
+        }
+      }
+
+      ctx.font = 'bold 34px Arial';
+      ctx.fillStyle = '#111';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+
+      for (let i = 0; i < n; i++) {
+        const x = LABEL + i * CELL + CELL / 2;
+        const y = LABEL + i * CELL + CELL / 2;
+        ctx.fillText(String(state.colClues[i]), x, LABEL - 18);
+        ctx.fillText(String(state.rowClues[i]), LABEL - 18, y);
+      }
+    }
+
+    function setMeta(text, isWin = false) {
+      metaEl.textContent = text;
+      metaEl.style.color = isWin ? '#129c2f' : '#222';
+    }
+
+    function afterAction() {
+      draw();
+      const check = validateCurrent(false);
+      if (!check.ok) {
+        setMeta(check.msg);
+        state.solved = false;
+        return;
+      }
+
+      const done = validateCurrent(true);
+      if (done.ok) {
+        state.solved = true;
+        setMeta(`✅ ${done.msg}`, true);
+      } else {
+        state.solved = false;
+        setMeta('继续加油，当前状态合法。');
+      }
+    }
+
+    function resetBoard() {
+      state.edges.clear();
+      state.cellMarks.clear();
+      state.pendingCell = null;
+      state.answerVisible = false;
+      state.solved = false;
+      draw();
+      setMeta('已重置当前题目');
+    }
+
+    function newPuzzle() {
+      const n = Number(sizeSelect.value);
+      const d = Number(difficultySelect.value);
+      const allowed = ALLOWED_DIVISORS[n] || [1];
+      if (!allowed.includes(d)) {
+        setMeta(`${n}x${n} 不支持 ${d}÷，请切换题型`);
+        return;
+      }
+
+      const comboKey = `${n}-${d}`;
+      let mode = modeSelect.value;
+      if (HARD_ONLY_COMBOS.has(comboKey)) {
+        mode = 'hard';
+        modeSelect.value = 'hard';
+      }
+      state.mode = mode;
+
+      let puzzle = null;
+      for (let i = 0; i < 3 && !puzzle; i++) puzzle = generatePuzzle(n, d);
+
+      if (!puzzle) {
+        setMeta('生成失败，请再试一次或切换难度');
+        return;
+      }
+
+      state.size = n;
+      state.difficulty = d;
+      state.regionMap = puzzle.regionMap;
+      state.rowClues = puzzle.rowClues;
+      state.colClues = puzzle.colClues;
+      state.answerEdges = puzzle.answerEdges;
+      state.edges.clear();
+      state.cellMarks.clear();
+      state.pendingCell = null;
+      state.answerVisible = false;
+      state.solved = false;
+      state.puzzleId += 1;
+
+      difficultyText.textContent = String(d);
+      draw();
+      setMeta(`${n}x${n}/${d}÷ ${state.mode === 'hard' ? '困难' : '普通'} · 本地题号: ${Date.now().toString().slice(-7)}-${state.puzzleId}`);
+    }
+
+    function refreshSelectorsBySize() {
+      const n = Number(sizeSelect.value);
+      const allowed = ALLOWED_DIVISORS[n] || [1];
+      const current = Number(difficultySelect.value);
+
+      difficultySelect.innerHTML = allowed
+        .map(v => `<option value="${v}">${v}÷</option>`)
+        .join('');
+
+      difficultySelect.value = String(allowed.includes(current) ? current : allowed[0]);
+      refreshModeByCombo();
+    }
+
+    function refreshModeByCombo() {
+      const n = Number(sizeSelect.value);
+      const d = Number(difficultySelect.value);
+      const comboKey = `${n}-${d}`;
+      const hardOnly = HARD_ONLY_COMBOS.has(comboKey);
+
+      modeSelect.querySelector('option[value="normal"]').disabled = hardOnly;
+      if (hardOnly && modeSelect.value !== 'hard') modeSelect.value = 'hard';
+    }
+
+    board.addEventListener('click', (e) => {
+      const rect = board.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
+      const target = getHoverTarget(x, y);
+      if (!target) return;
+
+      if (target.kind === 'edge') {
+        state.pendingCell = null;
+        applyToolOnEdge(target.edge);
+      } else {
+        applyToolOnCell(target.r, target.c);
+      }
+    });
+
+    board.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      const rect = board.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
+      const target = getHoverTarget(x, y);
+      if (!target) return;
+
+      if (target.kind === 'edge') {
+        const t = getEdgeType(target.edge);
+        setEdgeType(target.edge, t === 'edgeX' ? 'none' : 'edgeX');
+      } else {
+        const k = keyCell(target.r, target.c);
+        const t = state.cellMarks.get(k) || 'none';
+        state.cellMarks.set(k, t === 'cellX' ? 'none' : 'cellX');
+        if (state.cellMarks.get(k) === 'none') state.cellMarks.delete(k);
+      }
+      afterAction();
+    });
+
+    toolGroup.addEventListener('click', (e) => {
+      const btn = e.target.closest('button[data-tool]');
+      if (!btn) return;
+      state.currentTool = btn.dataset.tool;
+      state.pendingCell = null;
+      toolGroup.querySelectorAll('button').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      draw();
+    });
+
+    newPuzzleBtn.addEventListener('click', newPuzzle);
+    sizeSelect.addEventListener('change', refreshSelectorsBySize);
+    difficultySelect.addEventListener('change', refreshModeByCombo);
+    modeSelect.addEventListener('change', refreshModeByCombo);
+    resetBtn.addEventListener('click', resetBoard);
+    checkBtn.addEventListener('click', () => {
+      const strict = validateCurrent(true);
+      if (strict.ok) {
+        setMeta('✅ 恭喜，答案满足全部规则！', true);
+      } else {
+        const nonStrict = validateCurrent(false);
+        if (!nonStrict.ok) setMeta(nonStrict.msg);
+        else setMeta(strict.msg);
+      }
+    });
+
+    showAnswerBtn.addEventListener('click', () => {
+      state.answerVisible = !state.answerVisible;
+      showAnswerBtn.textContent = state.answerVisible ? '隐藏答案' : '显示答案';
+      draw();
+      if (state.answerVisible) setMeta('已显示参考答案（蓝色线）');
+    });
+
+    refreshSelectorsBySize();
+    newPuzzle();
+  </script>
+</body>
+</html>
